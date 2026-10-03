@@ -1,0 +1,1117 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESCAPE ACTION - 人間テトリス 3D</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Teko:wght@700&family=Zen+Maru+Gothic:wght@700;900&display=swap" rel="stylesheet">
+
+    <!-- Three.js for 3D graphics -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- MediaPipe Pose & Camera Utils -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+
+    <style>
+        body {
+            font-family: 'Zen Maru Gothic', sans-serif;
+            background-color: #050508;
+            color: #ffffff;
+            overflow: hidden;
+            user-select: none;
+        }
+        .font-teko {
+            font-family: 'Teko', sans-serif;
+        }
+        canvas {
+            display: block;
+        }
+        .speed-line {
+            background: radial-gradient(circle, transparent 40%, rgba(255, 255, 255, 0.15) 90%, rgba(255,255,255,0.4) 100%);
+            pointer-events: none;
+        }
+        .glitch-text {
+            text-shadow: 3px 3px 0px #ff0055, -3px -3px 0px #00e5ff;
+        }
+        /* Custom scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #111;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #ff0055;
+            border-radius: 3px;
+        }
+    </style>
+</head>
+<body class="relative w-screen h-screen overflow-hidden bg-black text-white">
+
+    <!-- Background 3D Canvas Container -->
+    <div id="canvas-container" class="absolute inset-0 z-0"></div>
+
+    <!-- Speed Lines Overlay -->
+    <div id="speed-lines" class="absolute inset-0 z-10 speed-line opacity-80 transition-opacity duration-300"></div>
+
+    <!-- Screen Flash Effect -->
+    <div id="flash-overlay" class="absolute inset-0 z-20 bg-white pointer-events-none opacity-0 transition-opacity duration-150"></div>
+
+    <!-- MAIN UI LAYER -->
+    <div class="relative z-30 w-full h-full flex flex-col justify-between p-4 md:p-6 pointer-events-none">
+
+        <!-- Top Header HUD -->
+        <div class="flex justify-between items-start w-full">
+            <!-- Game Title / Mode Info -->
+            <div class="flex flex-col">
+                <div class="flex items-center gap-2">
+                    <span class="bg-red-600 text-white font-black text-xs px-2 py-1 rounded tracking-wider uppercase">PE Physical Mode</span>
+                    <span id="current-mode-tag" class="bg-cyan-500 text-black font-black text-xs px-2 py-1 rounded tracking-wider uppercase">30s CHALLENGE</span>
+                </div>
+                <h1 class="text-3xl md:text-5xl font-black font-teko tracking-wider text-yellow-400 italic glitch-text mt-1">
+                    ESCAPE ACTION <span class="text-white text-2xl md:text-3xl font-normal">人間テトリス</span>
+                </h1>
+            </div>
+
+            <!-- Score & Timer Display -->
+            <div id="hud-stats" class="hidden flex items-center gap-4 bg-black/70 backdrop-blur border border-yellow-500/50 px-6 py-2 rounded-2xl shadow-lg shadow-yellow-500/20">
+                <div class="text-center">
+                    <div class="text-xs text-gray-400 font-bold uppercase">TIME</div>
+                    <div id="timer-display" class="text-3xl md:text-4xl font-black font-teko text-cyan-400">30.0</div>
+                </div>
+                <div class="w-px h-8 bg-gray-700"></div>
+                <div class="text-center">
+                    <div class="text-xs text-gray-400 font-bold uppercase">SCORE</div>
+                    <div id="score-display" class="text-3xl md:text-4xl font-black font-teko text-yellow-400">0</div>
+                </div>
+                <div class="w-px h-8 bg-gray-700"></div>
+                <div class="text-center">
+                    <div class="text-xs text-gray-400 font-bold uppercase">COMBO</div>
+                    <div id="combo-display" class="text-3xl md:text-4xl font-black font-teko text-red-500">x0</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Camera Feedback Box (Bottom Right / Top Right) -->
+        <div id="camera-hud" class="absolute bottom-4 right-4 w-44 md:w-64 bg-black/80 border-2 border-cyan-400/60 rounded-2xl p-2 shadow-2xl pointer-events-auto transition-all duration-300">
+            <div class="relative w-full aspect-video rounded-lg overflow-hidden bg-gray-900 border border-gray-700">
+                <video id="webcam-video" class="absolute inset-0 w-full h-full object-cover transform -scale-x-100" playsinline></video>
+                <canvas id="pose-canvas" class="absolute inset-0 w-full h-full object-cover transform -scale-x-100"></canvas>
+
+                <!-- Status indicator -->
+                <div class="absolute top-2 left-2 flex items-center gap-1.5 bg-black/60 px-2 py-0.5 rounded-full text-xs">
+                    <span id="camera-dot" class="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse"></span>
+                    <span id="camera-status-text" class="text-[10px] font-bold text-gray-300">カメラ検出中...</span>
+                </div>
+            </div>
+            <div class="flex justify-between items-center mt-2 text-xs px-1 text-gray-300">
+                <span>一致度: <strong id="accuracy-live-text" class="text-yellow-400 text-sm font-teko">0%</strong></span>
+                <button id="toggle-camera-btn" class="bg-gray-800 hover:bg-gray-700 text-cyan-300 text-[11px] px-2 py-1 rounded transition">
+                    <i class="fa-solid fa-camera"></i> 切替/デモ
+                </button>
+            </div>
+        </div>
+
+        <!-- Center Dynamic Countdown / Giant Message Overlay -->
+        <div class="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+            <div id="center-message" class="text-center transition-all transform scale-100 opacity-100">
+                <!-- Dynamic text inserted via JS (3, 2, 1, GO!, PERFECT, CRASH!) -->
+            </div>
+        </div>
+
+        <!-- Live Score breakdown toast -->
+        <div id="score-toast" class="absolute left-1/2 bottom-20 transform -translate-x-1/2 opacity-0 transition-all duration-300 pointer-events-none text-center">
+            <div class="bg-black/90 border-2 border-yellow-400 text-yellow-300 font-bold px-6 py-2 rounded-full text-lg shadow-2xl backdrop-blur flex items-center gap-4">
+                <span>反応: <strong id="toast-speed" class="text-cyan-400">+0</strong></span>
+                <span>精度: <strong id="toast-pose" class="text-green-400">+0</strong></span>
+                <span>ボーナス: <strong id="toast-combo" class="text-red-400">+0</strong></span>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- START MENU OVERLAY -->
+    <div id="menu-screen" class="absolute inset-0 z-40 bg-black/85 backdrop-blur-md flex flex-col items-center justify-center p-6 pointer-events-auto">
+        <div class="max-w-2xl w-full text-center space-y-6">
+
+            <div class="space-y-2">
+                <div class="inline-block bg-gradient-to-r from-red-600 to-yellow-500 text-black font-black text-xs px-3 py-1 rounded-full uppercase tracking-widest">
+                    リアルタイムカメラポーズアクション
+                </div>
+                <h2 class="text-5xl md:text-7xl font-black font-teko text-yellow-400 italic glitch-text tracking-wider">
+                    HUMAN TETRIS 3D
+                </h2>
+                <p class="text-gray-300 text-sm md:text-base max-w-lg mx-auto">
+                    カメラに全身を映し、迫ってくる「壁の穴」と同じポーズを取れ！<br>
+                    反応速度・ポーズ精度・連続成功の3軸で高得点を狙おう！
+                </p>
+            </div>
+
+            <!-- Mode Selector Buttons -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 my-6">
+                <button onclick="selectGameMode('30s', true)" id="mode-30s" class="mode-btn bg-gray-800/90 hover:bg-yellow-500 hover:text-black border-2 border-yellow-500/50 p-4 rounded-2xl transition duration-200 text-left relative overflow-hidden group cursor-pointer">
+                    <div class="text-yellow-400 group-hover:text-black font-black font-teko text-2xl flex justify-between items-center">
+                        <span>30 SEC CHALLENGE</span>
+                        <i class="fa-solid fa-play text-sm opacity-0 group-hover:opacity-100 transition"></i>
+                    </div>
+                    <p class="text-xs text-gray-400 group-hover:text-black/80">30秒間で限界何カベ突破できるか！スピード勝負。</p>
+                </button>
+
+                <button onclick="selectGameMode('60s', true)" id="mode-60s" class="mode-btn bg-gray-800/90 hover:bg-yellow-500 hover:text-black border-2 border-yellow-500/50 p-4 rounded-2xl transition duration-200 text-left relative overflow-hidden group cursor-pointer">
+                    <div class="text-yellow-400 group-hover:text-black font-black font-teko text-2xl flex justify-between items-center">
+                        <span>60 SEC SURVIVAL</span>
+                        <i class="fa-solid fa-play text-sm opacity-0 group-hover:opacity-100 transition"></i>
+                    </div>
+                    <p class="text-xs text-gray-400 group-hover:text-black/80">壁の穴が徐々に小さく複雑に！体育授業に最適な持久型。</p>
+                </button>
+
+                <button onclick="selectGameMode('coop', true)" id="mode-coop" class="mode-btn bg-gray-800/90 hover:bg-yellow-500 hover:text-black border-2 border-yellow-500/50 p-4 rounded-2xl transition duration-200 text-left relative overflow-hidden group cursor-pointer">
+                    <div class="text-yellow-400 group-hover:text-black font-black font-teko text-2xl flex justify-between items-center">
+                        <span>2-PLAYER CO-OP</span>
+                        <i class="fa-solid fa-play text-sm opacity-0 group-hover:opacity-100 transition"></i>
+                    </div>
+                    <p class="text-xs text-gray-400 group-hover:text-black/80">2人で協力して複雑なポーズや連結穴をクリアしよう！</p>
+                </button>
+            </div>
+
+            <!-- Features Badges -->
+            <div class="grid grid-cols-3 gap-2 text-xs text-gray-400 bg-gray-900/80 p-3 rounded-xl border border-gray-800">
+                <div class="flex items-center justify-center gap-1">
+                    <i class="fa-solid fa-bolt text-yellow-400"></i> 反応速度採点
+                </div>
+                <div class="flex items-center justify-center gap-1">
+                    <i class="fa-solid fa-bullseye text-cyan-400"></i> ポーズ精度検出
+                </div>
+                <div class="flex items-center justify-center gap-1">
+                    <i class="fa-solid fa-fire text-red-500"></i> 連続成功コンボ
+                </div>
+            </div>
+
+            <!-- Start Game Button -->
+            <div class="pt-2">
+                <button id="start-btn" class="w-full md:w-3/4 bg-gradient-to-r from-red-600 via-yellow-500 to-red-600 hover:from-red-500 hover:to-yellow-400 text-black font-black text-2xl py-4 rounded-2xl shadow-xl shadow-red-600/30 transform hover:-translate-y-1 transition duration-150 uppercase tracking-widest italic">
+                    <i class="fa-solid fa-play mr-2"></i> GAME START
+                </button>
+            </div>
+
+            <!-- Leaderboard Summary -->
+            <div class="bg-black/60 rounded-xl p-3 border border-gray-800 text-left text-xs">
+                <div class="flex justify-between items-center mb-2">
+                    <span class="font-bold text-yellow-400"><i class="fa-solid fa-trophy"></i> ハイスコアランキング</span>
+                    <button onclick="resetLeaderboard()" class="text-gray-500 hover:text-red-400 text-[10px]">リセット</button>
+                </div>
+                <div id="mini-leaderboard" class="space-y-1 text-gray-300">
+                    <!-- Populated via JS -->
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- RESULT MODAL SCREEN -->
+    <div id="result-screen" class="hidden absolute inset-0 z-50 bg-black/90 backdrop-blur-lg flex flex-col items-center justify-center p-6 pointer-events-auto">
+        <div class="max-w-xl w-full bg-gray-900 border-2 border-yellow-500 rounded-3xl p-6 md:p-8 text-center space-y-6 shadow-2xl relative overflow-hidden">
+            
+            <div class="absolute -top-12 -right-12 w-40 h-40 bg-yellow-500/10 rounded-full blur-2xl"></div>
+
+            <div class="space-y-1">
+                <div id="result-rank-badge" class="inline-block bg-yellow-500 text-black font-black font-teko text-3xl px-4 py-0.5 rounded-full uppercase">
+                    RANK S
+                </div>
+                <h2 class="text-4xl md:text-5xl font-black font-teko text-white italic tracking-wider">
+                    CHALLENGE COMPLETE!
+                </h2>
+            </div>
+
+            <!-- Final Score Main -->
+            <div class="bg-black/80 rounded-2xl p-4 border border-yellow-500/40">
+                <div class="text-xs text-gray-400 uppercase font-bold">TOTAL SCORE</div>
+                <div id="final-score" class="text-6xl md:text-7xl font-black font-teko text-yellow-400 tracking-wider">
+                    12,450
+                </div>
+            </div>
+
+            <!-- Detailed Metrics Grid (PE / Class Evaluation) -->
+            <div class="grid grid-cols-3 gap-3 text-center">
+                <div class="bg-gray-800/80 p-3 rounded-xl border border-cyan-500/30">
+                    <div class="text-[11px] text-gray-400 font-bold">平均反応速度</div>
+                    <div id="stat-reaction" class="text-2xl font-black font-teko text-cyan-400 mt-1">0.32秒</div>
+                </div>
+                <div class="bg-gray-800/80 p-3 rounded-xl border border-green-500/30">
+                    <div class="text-[11px] text-gray-400 font-bold">平均ポーズ精度</div>
+                    <div id="stat-accuracy" class="text-2xl font-black font-teko text-green-400 mt-1">94.2%</div>
+                </div>
+                <div class="bg-gray-800/80 p-3 rounded-xl border border-red-500/30">
+                    <div class="text-[11px] text-gray-400 font-bold">最大コンボ数</div>
+                    <div id="stat-maxcombo" class="text-2xl font-black font-teko text-red-500 mt-1">12 回</div>
+                </div>
+            </div>
+
+            <!-- Action Buttons -->
+            <div class="flex gap-4 pt-2">
+                <button onclick="returnToMenu()" class="flex-1 bg-gray-800 hover:bg-gray-700 text-white font-bold py-3 rounded-xl transition border border-gray-700">
+                    <i class="fa-solid fa-house mr-1"></i> メニューへ
+                </button>
+                <button onclick="restartGame()" class="flex-1 bg-yellow-500 hover:bg-yellow-400 text-black font-black text-lg py-3 rounded-xl transition shadow-lg shadow-yellow-500/30">
+                    <i class="fa-solid fa-rotate-right mr-1"></i> 再挑戦
+                </button>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        class SoundEngine {
+            constructor() {
+                this.ctx = null;
+            }
+            init() {
+                if (!this.ctx) {
+                    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+                    if (AudioCtx) {
+                        this.ctx = new AudioCtx();
+                    }
+                }
+                if (this.ctx && this.ctx.state === 'suspended') {
+                    this.ctx.resume();
+                }
+            }
+            playTone(freq, type = 'sine', duration = 0.1, gainVal = 0.2) {
+                if (!this.ctx) return;
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = type;
+                osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
+                gain.gain.setValueAtTime(gainVal, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + duration);
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.start();
+                osc.stop(this.ctx.currentTime + duration);
+            }
+            playCountdownBeep(isGo = false) {
+                this.init();
+                if (isGo) {
+                    this.playTone(880, 'triangle', 0.4, 0.4); // High A
+                } else {
+                    this.playTone(440, 'sine', 0.2, 0.3); // Low A
+                }
+            }
+            playSuccessSound() {
+                this.init();
+                const now = this.ctx.currentTime;
+                // Chime sequence
+                [523.25, 659.25, 783.99, 1046.50].forEach((f, i) => {
+                    setTimeout(() => this.playTone(f, 'sine', 0.25, 0.3), i * 60);
+                });
+            }
+            playExplosionSound() {
+                this.init();
+                // Noise buffer simulation
+                const bufferSize = this.ctx.sampleRate * 0.4;
+                const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+                const output = buffer.getChannelData(0);
+                for (let i = 0; i < bufferSize; i++) {
+                    output[i] = Math.random() * 2 - 1;
+                }
+                const whiteNoise = this.ctx.createBufferSource();
+                whiteNoise.buffer = buffer;
+
+                const filter = this.ctx.createBiquadFilter();
+                filter.type = 'lowpass';
+                filter.frequency.setValueAtTime(800, this.ctx.currentTime);
+                filter.frequency.exponentialRampToValueAtTime(50, this.ctx.currentTime + 0.4);
+
+                const gain = this.ctx.createGain();
+                gain.gain.setValueAtTime(0.5, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.4);
+
+                whiteNoise.connect(filter);
+                filter.connect(gain);
+                gain.connect(this.ctx.destination);
+
+                whiteNoise.start();
+                whiteNoise.stop(this.ctx.currentTime + 0.4);
+            }
+        }
+        const sound = new SoundEngine();
+
+        const GAME_CONFIG = {
+            tunnelLength: 100,
+            wallStartDepth: -80,
+            wallEndDepth: 5,
+            baseSpeed: 0.6,
+            shakeIntensity: 0.3
+        };
+
+        let gameState = {
+            activeMode: '30s', // '30s', '60s', 'coop'
+            isPlaying: false,
+            timeRemaining: 30,
+            score: 0,
+            combo: 0,
+            maxCombo: 0,
+            reactions: [],
+            accuracies: [],
+            currentWall: null,
+            targetPose: null,
+            wallSpeed: GAME_CONFIG.baseSpeed,
+            holeScale: 1.0,
+            lastWallTime: 0,
+            isDemoCamera: false
+        };
+
+        // Pose Catalog (Human shapes, geometric shapes, squat, jump, tilted)
+        const POSE_CATALOG = [
+            { id: 'T_POSE', name: 'T字ポーズ', type: 'human', scale: 1.0, angle: 0 },
+            { id: 'SQUAT', name: 'しゃがみ姿勢', type: 'human', scale: 0.9, angle: 0 },
+            { id: 'ONE_LEG', name: '片足立ち', type: 'human', scale: 0.95, angle: 0 },
+            { id: 'TILT_LEFT', name: '左傾きポーズ', type: 'human', scale: 0.85, angle: -0.25 },
+            { id: 'TILT_RIGHT', name: '右傾きポーズ', type: 'human', scale: 0.85, angle: 0.25 },
+            { id: 'STAR_SHAPE', name: '星型(ジャンプ/大の字)', type: 'human', scale: 1.0, angle: 0 },
+            { id: 'CIRCLE_SHAPE', name: '頭上○の字', type: 'human', scale: 0.85, angle: 0 },
+            { id: 'COOP_DOUBLE', name: '2人ダブルVポーズ', type: 'coop', scale: 1.0, angle: 0 }
+        ];
+
+        let scene, camera, renderer;
+        let tunnelMesh, wallGroup, particleSystem;
+        let cameraBasePos = { x: 0, y: 0, z: 10 };
+        let cameraShake = { x: 0, y: 0, z: 0 };
+
+        function init3D() {
+            const container = document.getElementById('canvas-container');
+            scene = new THREE.Scene();
+            scene.fog = new THREE.FogExp2(0x050508, 0.02);
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 200);
+            camera.position.set(cameraBasePos.x, cameraBasePos.y, cameraBasePos.z);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.setClearColor(0x050508, 1);
+            container.appendChild(renderer.domElement);
+
+            // Tunnel Geometry (Yellow speed lines & wireframe)
+            const tunnelGeo = new THREE.CylinderGeometry(12, 12, GAME_CONFIG.tunnelLength, 16, 30, true);
+            const tunnelMat = new THREE.MeshBasicMaterial({
+                color: 0xffaa00,
+                wireframe: true,
+                transparent: true,
+                opacity: 0.25,
+                side: THREE.BackSide
+            });
+            tunnelMesh = new THREE.Mesh(tunnelGeo, tunnelMat);
+            tunnelMesh.rotation.x = Math.PI / 2;
+            tunnelMesh.position.z = -GAME_CONFIG.tunnelLength / 2;
+            scene.add(tunnelMesh);
+
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
+            scene.add(ambientLight);
+            const dirLight = new THREE.DirectionalLight(0xff0055, 1.5);
+            dirLight.position.set(0, 10, 10);
+            scene.add(dirLight);
+
+            // Wall Container
+            wallGroup = new THREE.Group();
+            scene.add(wallGroup);
+
+            // Particle Explosion Pool
+            initParticleExplosion();
+
+            // Window Resize Listener
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function createHoleWall(poseObj) {
+            // Remove existing wall
+            while(wallGroup.children.length > 0) {
+                const child = wallGroup.children[0];
+                wallGroup.remove(child);
+            }
+
+            const wallWidth = 16;
+            const wallHeight = 12;
+            
+            // Outer wall mesh shape with cut-out hole
+            const shape = new THREE.Shape();
+            shape.moveTo(-wallWidth/2, -wallHeight/2);
+            shape.lineTo(wallWidth/2, -wallHeight/2);
+            shape.lineTo(wallWidth/2, wallHeight/2);
+            shape.lineTo(-wallWidth/2, wallHeight/2);
+            shape.lineTo(-wallWidth/2, -wallHeight/2);
+
+            // Hole shape path based on Pose type
+            const holePath = new THREE.Path();
+            const scale = poseObj.scale * gameState.holeScale;
+
+            if (poseObj.id === 'SQUAT') {
+                // Low Squat hole
+                holePath.moveTo(-2 * scale, -4 * scale);
+                holePath.lineTo(2 * scale, -4 * scale);
+                holePath.lineTo(2.5 * scale, -1 * scale);
+                holePath.lineTo(-2.5 * scale, -1 * scale);
+            } else if (poseObj.id === 'CIRCLE_SHAPE') {
+                // Circle hole
+                const r = 2.5 * scale;
+                for (let i = 0; i <= 32; i++) {
+                    const theta = (i / 32) * Math.PI * 2;
+                    const x = Math.cos(theta) * r;
+                    const y = Math.sin(theta) * r + 1;
+                    if (i === 0) holePath.moveTo(x, y);
+                    else holePath.lineTo(x, y);
+                }
+            } else {
+                // Standard Human Silhouette Hole
+                holePath.moveTo(-0.8 * scale, -4.5 * scale); // left foot
+                holePath.lineTo(-0.3 * scale, -4.5 * scale);
+                holePath.lineTo(-0.3 * scale, -1.5 * scale);
+                holePath.lineTo(0.3 * scale, -1.5 * scale);
+                holePath.lineTo(0.3 * scale, -4.5 * scale);
+                holePath.lineTo(0.8 * scale, -4.5 * scale); // right foot
+                holePath.lineTo(0.9 * scale, -0.5 * scale);
+                // Arms
+                if (poseObj.id === 'T_POSE') {
+                    holePath.lineTo(3.5 * scale, 0.5 * scale);
+                    holePath.lineTo(3.5 * scale, 1.3 * scale);
+                    holePath.lineTo(0.8 * scale, 1.3 * scale);
+                } else {
+                    holePath.lineTo(2.2 * scale, 2.0 * scale);
+                    holePath.lineTo(1.8 * scale, 2.4 * scale);
+                    holePath.lineTo(0.8 * scale, 1.2 * scale);
+                }
+                // Head
+                holePath.lineTo(0.8 * scale, 2.5 * scale);
+                holePath.lineTo(0.0 * scale, 3.3 * scale);
+                holePath.lineTo(-0.8 * scale, 2.5 * scale);
+                // Left Arm
+                if (poseObj.id === 'T_POSE') {
+                    holePath.lineTo(-0.8 * scale, 1.3 * scale);
+                    holePath.lineTo(-3.5 * scale, 1.3 * scale);
+                    holePath.lineTo(-3.5 * scale, 0.5 * scale);
+                } else {
+                    holePath.lineTo(-0.8 * scale, 1.2 * scale);
+                    holePath.lineTo(-1.8 * scale, 2.4 * scale);
+                    holePath.lineTo(-2.2 * scale, 2.0 * scale);
+                }
+                holePath.lineTo(-0.9 * scale, -0.5 * scale);
+            }
+
+            shape.holes.push(holePath);
+
+            const extrudeSettings = { depth: 0.8, bevelEnabled: true, bevelSegments: 2, steps: 1, bevelSize: 0.1, bevelThickness: 0.1 };
+            const geometry = new THREE.ExtrudeGeometry(shape, extrudeSettings);
+
+            // Wall Material (Hot Pink / Magenta with bright border)
+            const material = new THREE.MeshPhongMaterial({
+                color: 0xff0055,
+                emissive: 0x440011,
+                specular: 0xffffff,
+                shininess: 30,
+                side: THREE.DoubleSide
+            });
+
+            const wallMesh = new THREE.Mesh(geometry, material);
+            
+            // Rotation if specified
+            if (poseObj.angle) {
+                wallMesh.rotation.z = poseObj.angle;
+            }
+
+            wallMesh.position.z = GAME_CONFIG.wallStartDepth;
+            wallGroup.add(wallMesh);
+
+            // Add Neon Grid Edge Frame around Hole
+            const edgeGeo = new THREE.EdgesGeometry(geometry);
+            const edgeMat = new THREE.LineBasicMaterial({ color: 0x00ffff, linewidth: 2 });
+            const wireframe = new THREE.LineSegments(edgeGeo, edgeMat);
+            wallMesh.add(wireframe);
+
+            gameState.currentWall = wallMesh;
+            gameState.targetPose = poseObj;
+            gameState.lastWallTime = performance.now();
+        }
+
+        // Particles for Explosion
+        let particleGeo, particleMat, particleMesh;
+        let particleVelocities = [];
+
+        function initParticleExplosion() {
+            const count = 300;
+            particleGeo = new THREE.BufferGeometry();
+            const positions = new Float32Array(count * 3);
+            particleVelocities = [];
+
+            for(let i=0; i<count*3; i+=3) {
+                positions[i] = 0;
+                positions[i+1] = 0;
+                positions[i+2] = 0;
+                particleVelocities.push({
+                    x: (Math.random() - 0.5) * 1.2,
+                    y: (Math.random() - 0.5) * 1.2,
+                    z: (Math.random() - 0.5) * 1.2
+                });
+            }
+            particleGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            particleMat = new THREE.PointsMaterial({
+                color: 0xffea00,
+                size: 0.4,
+                transparent: true,
+                opacity: 0
+            });
+            particleMesh = new THREE.Points(particleGeo, particleMat);
+            scene.add(particleMesh);
+        }
+
+        function triggerExplosion(x, y, z) {
+            particleMesh.position.set(x, y, z);
+            particleMat.opacity = 1.0;
+            const positions = particleGeo.attributes.position.array;
+            for(let i=0; i<positions.length; i+=3) {
+                positions[i] = (Math.random() - 0.5) * 2;
+                positions[i+1] = (Math.random() - 0.5) * 2;
+                positions[i+2] = (Math.random() - 0.5) * 2;
+            }
+            particleGeo.attributes.position.needsUpdate = true;
+        }
+
+        function updateParticles() {
+            if (particleMat.opacity > 0) {
+                particleMat.opacity -= 0.03;
+                const positions = particleGeo.attributes.position.array;
+                for(let i=0; i<positions.length; i+=3) {
+                    const idx = i / 3;
+                    positions[i] += particleVelocities[idx].x;
+                    positions[i+1] += particleVelocities[idx].y;
+                    positions[i+2] += particleVelocities[idx].z;
+                }
+                particleGeo.attributes.position.needsUpdate = true;
+            }
+        }
+
+        let currentPoseLandmarks = null;
+        let videoElement, poseCanvas, poseCtx;
+
+        function initCameraAndPose() {
+            try {
+                videoElement = document.getElementById('webcam-video');
+                poseCanvas = document.getElementById('pose-canvas');
+                if (!videoElement || !poseCanvas) return;
+                poseCtx = poseCanvas.getContext('2d');
+
+                if (typeof Pose !== 'undefined' && typeof Camera !== 'undefined') {
+                    const pose = new Pose({
+                        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+                    });
+
+                    pose.setOptions({
+                        modelComplexity: 1,
+                        smoothLandmarks: true,
+                        enableSegmentation: false,
+                        minDetectionConfidence: 0.5,
+                        minTrackingConfidence: 0.5
+                    });
+
+                    pose.onResults(onPoseResults);
+
+                    const cameraUtil = new Camera(videoElement, {
+                        onFrame: async () => {
+                            if (!gameState.isDemoCamera) {
+                                try {
+                                    await pose.send({ image: videoElement });
+                                } catch (e) {
+                                    console.warn("Pose estimation error:", e);
+                                }
+                            }
+                        },
+                        width: 640,
+                        height: 480
+                    });
+
+                    cameraUtil.start().then(() => {
+                        const dot = document.getElementById('camera-dot');
+                        const statusText = document.getElementById('camera-status-text');
+                        if (dot) dot.className = 'w-2.5 h-2.5 rounded-full bg-green-500 animate-ping';
+                        if (statusText) statusText.innerText = 'カメラ正常作動中';
+                    }).catch(err => {
+                        console.warn("Camera failed, fallback to Demo mode", err);
+                        enableDemoCameraMode();
+                    });
+                } else {
+                    console.warn("MediaPipe Pose/Camera not loaded, fallback to Demo mode");
+                    enableDemoCameraMode();
+                }
+            } catch (err) {
+                console.warn("Camera init error, switching to demo mode", err);
+                enableDemoCameraMode();
+            }
+
+            document.getElementById('toggle-camera-btn').addEventListener('click', () => {
+                gameState.isDemoCamera = !gameState.isDemoCamera;
+                if (gameState.isDemoCamera) enableDemoCameraMode();
+            });
+        }
+
+        function enableDemoCameraMode() {
+            gameState.isDemoCamera = true;
+            const dot = document.getElementById('camera-dot');
+            const statusText = document.getElementById('camera-status-text');
+            if (dot) dot.className = 'w-2.5 h-2.5 rounded-full bg-yellow-400';
+            if (statusText) statusText.innerText = 'デモ/シミュレーター';
+        }
+
+        function onPoseResults(results) {
+            poseCtx.clearRect(0, 0, poseCanvas.width, poseCanvas.height);
+            if (results.poseLandmarks) {
+                currentPoseLandmarks = results.poseLandmarks;
+                drawSkeleton(results.poseLandmarks);
+            }
+        }
+
+        function drawSkeleton(landmarks) {
+            poseCtx.fillStyle = '#00e5ff';
+            poseCtx.strokeStyle = '#ff0055';
+            poseCtx.lineWidth = 3;
+
+            // Simple stickman renderer
+            const connections = [
+                [11, 12], [11, 13], [13, 15], [12, 14], [14, 16], // Upper body
+                [11, 23], [12, 24], [23, 24], // Torso
+                [23, 25], [25, 27], [24, 26], [26, 28] // Legs
+            ];
+
+            connections.forEach(([i, j]) => {
+                const p1 = landmarks[i];
+                const p2 = landmarks[j];
+                if (p1 && p2 && p1.visibility > 0.4 && p2.visibility > 0.4) {
+                    poseCtx.beginPath();
+                    poseCtx.moveTo(p1.x * poseCanvas.width, p1.y * poseCanvas.height);
+                    poseCtx.lineTo(p2.x * poseCanvas.width, p2.y * poseCanvas.height);
+                    poseCtx.stroke();
+                }
+            });
+
+            landmarks.forEach(p => {
+                if (p.visibility > 0.4) {
+                    poseCtx.beginPath();
+                    poseCtx.arc(p.x * poseCanvas.width, p.y * poseCanvas.height, 4, 0, Math.PI * 2);
+                    poseCtx.fill();
+                }
+            });
+        }
+
+        function calculatePoseAccuracy() {
+            if (gameState.isDemoCamera) {
+                // デモ/シミュレーターモード時はテスト用にランダム可変
+                return Math.floor(75 + Math.random() * 20);
+            }
+
+            if (!currentPoseLandmarks || currentPoseLandmarks.length < 29) {
+                return 0; // 人間が未検出の場合は0点
+            }
+
+            const lm = currentPoseLandmarks;
+            const target = gameState.targetPose;
+            if (!target) return 0;
+
+            // 主要関節の可視性（認識精度）チェック
+            const nose = lm[0];
+            const leftShoulder = lm[11], rightShoulder = lm[12];
+            const leftWrist = lm[15], rightWrist = lm[16];
+            const leftHip = lm[23], rightHip = lm[24];
+            const leftKnee = lm[25], rightKnee = lm[26];
+            const leftAnkle = lm[27], rightAnkle = lm[28];
+
+            // 上半身が映っていない場合は不合格
+            if (leftShoulder.visibility < 0.4 || rightShoulder.visibility < 0.4) {
+                return 15;
+            }
+
+            let score = 0; // 0点ベースから加算方式へ修正
+
+            const shoulderCenterY = (leftShoulder.y + rightShoulder.y) / 2;
+            const hipCenterY = (leftHip.y + rightHip.y) / 2;
+            const shoulderWidth = Math.abs(leftShoulder.x - rightShoulder.x);
+
+            switch (target.id) {
+                case 'T_POSE': {
+                    // 両腕が水平に広がっているか
+                    const leftArmHorizontal = Math.abs(leftWrist.y - leftShoulder.y) < 0.15;
+                    const rightArmHorizontal = Math.abs(rightWrist.y - rightShoulder.y) < 0.15;
+                    const armsExtended = Math.abs(leftWrist.x - rightWrist.x) > shoulderWidth * 2.0;
+
+                    if (leftArmHorizontal && rightArmHorizontal) score += 60;
+                    if (armsExtended) score += 40;
+                    break;
+                }
+                case 'SQUAT': {
+                    // 腰と膝の高さが下がっているか
+                    const hipHeightRatio = hipCenterY - shoulderCenterY;
+                    const kneeFlex = (leftKnee.y - leftHip.y + rightKnee.y - rightHip.y) / 2;
+                    
+                    if (kneeFlex < 0.22 || hipCenterY > 0.65) score += 60;
+                    if (nose.y > 0.45) score += 40; // 頭の位置も下がっていれば加点
+                    break;
+                }
+                case 'ONE_LEG': {
+                    // 左右の足首の高さに十分な差があるか
+                    const ankleDiff = Math.abs(leftAnkle.y - rightAnkle.y);
+                    const kneeDiff = Math.abs(leftKnee.y - rightKnee.y);
+
+                    if (ankleDiff > 0.18 || kneeDiff > 0.15) score += 70;
+                    if (ankleDiff > 0.25) score += 30;
+                    break;
+                }
+                case 'TILT_LEFT': {
+                    // 体幹・両肩が左に傾いているか (画面ミラーリング考慮: 右肩が上がる/下がる判定)
+                    const shoulderSlope = leftShoulder.y - rightShoulder.y;
+                    if (shoulderSlope > 0.08) score += 60;
+                    if (shoulderSlope > 0.15) score += 40;
+                    break;
+                }
+                case 'TILT_RIGHT': {
+                    // 体幹・両肩が右に傾いているか
+                    const shoulderSlope = rightShoulder.y - leftShoulder.y;
+                    if (shoulderSlope > 0.08) score += 60;
+                    if (shoulderSlope > 0.15) score += 40;
+                    break;
+                }
+                case 'STAR_SHAPE': {
+                    // 両手が頭より高く、かつ両足・両手が開いているか
+                    const handsUp = leftWrist.y < leftShoulder.y && rightWrist.y < rightShoulder.y;
+                    const legsSpread = Math.abs(leftAnkle.x - rightAnkle.x) > shoulderWidth * 1.5;
+
+                    if (handsUp) score += 50;
+                    if (legsSpread) score += 50;
+                    break;
+                }
+                case 'CIRCLE_SHAPE': {
+                    // 両手が頭上で合わさっているか（頭上○の字）
+                    const handsAboveHead = leftWrist.y < nose.y && rightWrist.y < nose.y;
+                    const wristsTogether = Math.abs(leftWrist.x - rightWrist.x) < 0.25;
+
+                    if (handsAboveHead) score += 50;
+                    if (wristsTogether) score += 50;
+                    break;
+                }
+                default: {
+                    // その他のポーズ
+                    const handsUp = leftWrist.y < leftShoulder.y && rightWrist.y < rightShoulder.y;
+                    score = handsUp ? 75 : 30;
+                    break;
+                }
+            }
+
+            return Math.min(100, Math.max(10, score));
+        }
+
+        function selectGameMode(mode, autoStart = false) {
+            gameState.activeMode = mode;
+            document.querySelectorAll('.mode-btn').forEach(btn => {
+                btn.classList.remove('border-yellow-400', 'bg-yellow-500/20', 'ring-2', 'ring-yellow-400');
+            });
+            const selected = document.getElementById(`mode-${mode}`);
+            if (selected) {
+                selected.classList.add('border-yellow-400', 'bg-yellow-500/20', 'ring-2', 'ring-yellow-400');
+            }
+            if (autoStart) {
+                startGame();
+            }
+        }
+
+        function startGame() {
+            sound.init();
+            document.getElementById('menu-screen').classList.add('hidden');
+            document.getElementById('result-screen').classList.add('hidden');
+            document.getElementById('hud-stats').classList.remove('hidden');
+
+            // Set mode params
+            gameState.isPlaying = false;
+            gameState.score = 0;
+            gameState.combo = 0;
+            gameState.maxCombo = 0;
+            gameState.reactions = [];
+            gameState.accuracies = [];
+            gameState.holeScale = 1.0;
+            gameState.timeRemaining = gameState.activeMode === '60s' ? 60.0 : 30.0;
+
+            document.getElementById('current-mode-tag').innerText = 
+                gameState.activeMode === '30s' ? '30s CHALLENGE' :
+                gameState.activeMode === '60s' ? '60s SURVIVAL' : '2P CO-OP';
+
+            updateHUD();
+            runCountdown(() => {
+                gameState.isPlaying = true;
+                spawnNextWall();
+            });
+        }
+
+        function runCountdown(callback) {
+            const centerMsg = document.getElementById('center-message');
+            const sequence = ['3', '2', '1', 'GO!'];
+            let idx = 0;
+
+            const timer = setInterval(() => {
+                if (idx < sequence.length) {
+                    const text = sequence[idx];
+                    sound.playCountdownBeep(text === 'GO!');
+                    centerMsg.innerHTML = `<h1 class="text-9xl font-black font-teko text-yellow-400 italic glitch-text scale-125 transition transform">${text}</h1>`;
+                    idx++;
+                } else {
+                    clearInterval(timer);
+                    centerMsg.innerHTML = '';
+                    callback();
+                }
+            }, 800);
+        }
+
+        function spawnNextWall() {
+            // Pick pose based on mode
+            const catalog = gameState.activeMode === 'coop' ? 
+                POSE_CATALOG.filter(p => p.type === 'coop' || p.type === 'human') :
+                POSE_CATALOG.filter(p => p.type !== 'coop');
+
+            const pose = catalog[Math.floor(Math.random() * catalog.length)];
+            
+            // Gradually shrink hole size in 60s survival mode
+            if (gameState.activeMode === '60s') {
+                gameState.holeScale = Math.max(0.6, 1.0 - (60 - gameState.timeRemaining) * 0.007);
+            }
+
+            createHoleWall(pose);
+        }
+
+        function showFlash(color = 'white') {
+            const flash = document.getElementById('flash-overlay');
+            flash.style.backgroundColor = color;
+            flash.style.opacity = '0.8';
+            setTimeout(() => { flash.style.opacity = '0'; }, 150);
+        }
+
+        function triggerCameraShake() {
+            cameraShake.x = (Math.random() - 0.5) * GAME_CONFIG.shakeIntensity;
+            cameraShake.y = (Math.random() - 0.5) * GAME_CONFIG.shakeIntensity;
+        }
+
+        function resolveWallPass() {
+            const reactionTime = ((performance.now() - gameState.lastWallTime) / 1000).toFixed(2);
+            const accuracy = calculatePoseAccuracy();
+
+            const centerMsg = document.getElementById('center-message');
+
+            if (accuracy >= 65) {
+                // SUCCESS
+                sound.playSuccessSound();
+                sound.playExplosionSound();
+                showFlash('#00ffcc');
+                triggerCameraShake();
+                triggerExplosion(0, 0, GAME_CONFIG.wallEndDepth);
+
+                gameState.combo++;
+                gameState.maxCombo = Math.max(gameState.maxCombo, gameState.combo);
+
+                // Scoring Formula
+                const speedBonus = Math.max(100, Math.floor(1000 - reactionTime * 300));
+                const poseScore = accuracy * 15;
+                const comboBonus = gameState.combo * 200;
+                const totalGain = speedBonus + poseScore + comboBonus;
+
+                gameState.score += totalGain;
+                gameState.reactions.push(parseFloat(reactionTime));
+                gameState.accuracies.push(accuracy);
+
+                // Toast breakdown
+                showScoreToast(speedBonus, poseScore, comboBonus);
+
+                centerMsg.innerHTML = `<div class="text-6xl font-black font-teko text-green-400 italic glitch-text">DONE! PERFECT</div>`;
+            } else {
+                // FAIL
+                sound.playExplosionSound();
+                showFlash('#ff0055');
+                triggerCameraShake();
+
+                gameState.combo = 0;
+                centerMsg.innerHTML = `<div class="text-6xl font-black font-teko text-red-500 italic glitch-text">CRASH! MISS</div>`;
+            }
+
+            setTimeout(() => { centerMsg.innerHTML = ''; }, 600);
+            updateHUD();
+
+            if (gameState.isPlaying) {
+                spawnNextWall();
+            }
+        }
+
+        function showScoreToast(speed, pose, combo) {
+            const toast = document.getElementById('score-toast');
+            document.getElementById('toast-speed').innerText = `+${speed}`;
+            document.getElementById('toast-pose').innerText = `+${pose}`;
+            document.getElementById('toast-combo').innerText = `+${combo}`;
+            
+            toast.style.opacity = '1';
+            toast.style.transform = 'translate(-50%, -10px)';
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transform = 'translate(-50%, 0px)';
+            }, 1200);
+        }
+
+        function updateHUD() {
+            document.getElementById('timer-display').innerText = gameState.timeRemaining.toFixed(1);
+            document.getElementById('score-display').innerText = gameState.score.toLocaleString();
+            document.getElementById('combo-display').innerText = `x${gameState.combo}`;
+
+            const liveAcc = calculatePoseAccuracy();
+            document.getElementById('accuracy-live-text').innerText = `${liveAcc}%`;
+        }
+
+        let lastTimestamp = performance.now();
+
+        function animate(timestamp) {
+            requestAnimationFrame(animate);
+
+            const delta = (timestamp - lastTimestamp) / 1000;
+            lastTimestamp = timestamp;
+
+            // Camera Shake Decay
+            cameraShake.x *= 0.85;
+            cameraShake.y *= 0.85;
+            camera.position.x = cameraBasePos.x + cameraShake.x;
+            camera.position.y = cameraBasePos.y + cameraShake.y;
+
+            // Tunnel animation motion
+            if (tunnelMesh) {
+                tunnelMesh.rotation.z += 0.002;
+            }
+
+            updateParticles();
+
+            // Gameplay Active Loop
+            if (gameState.isPlaying) {
+                // Timer Countdown
+                gameState.timeRemaining -= delta;
+                if (gameState.timeRemaining <= 0) {
+                    gameState.timeRemaining = 0;
+                    endGame();
+                }
+
+                // Move Wall towards player
+                if (gameState.currentWall) {
+                    gameState.currentWall.position.z += gameState.wallSpeed;
+
+                    if (gameState.currentWall.position.z >= GAME_CONFIG.wallEndDepth) {
+                        resolveWallPass();
+                    }
+                }
+
+                updateHUD();
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        function endGame() {
+            gameState.isPlaying = false;
+            if (gameState.currentWall) {
+                wallGroup.remove(gameState.currentWall);
+            }
+
+            // Calculate final statistics
+            const avgReaction = gameState.reactions.length > 0 ? 
+                (gameState.reactions.reduce((a, b) => a + b, 0) / gameState.reactions.length).toFixed(2) : "0.00";
+            const avgAccuracy = gameState.accuracies.length > 0 ? 
+                (gameState.accuracies.reduce((a, b) => a + b, 0) / gameState.accuracies.length).toFixed(1) : "0.0";
+
+            document.getElementById('final-score').innerText = gameState.score.toLocaleString();
+            document.getElementById('stat-reaction').innerText = `${avgReaction} 秒`;
+            document.getElementById('stat-accuracy').innerText = `${avgAccuracy} %`;
+            document.getElementById('stat-maxcombo').innerText = `${gameState.maxCombo} 回`;
+
+            // Rank evaluation
+            let rank = 'C';
+            if (gameState.score > 15000) rank = 'S+';
+            else if (gameState.score > 10000) rank = 'S';
+            else if (gameState.score > 6000) rank = 'A';
+            else if (gameState.score > 3000) rank = 'B';
+
+            document.getElementById('result-rank-badge').innerText = `RANK ${rank}`;
+
+            // Save to Leaderboard
+            saveScore(gameState.score, rank, gameState.activeMode);
+            updateLeaderboardUI();
+
+            document.getElementById('result-screen').classList.remove('hidden');
+        }
+
+        function saveScore(score, rank, mode) {
+            const scores = JSON.parse(localStorage.getItem('ht_scores') || '[]');
+            scores.push({
+                score, rank, mode, date: new Date().toLocaleDateString('ja-JP')
+            });
+            scores.sort((a, b) => b.score - a.score);
+            localStorage.setItem('ht_scores', JSON.stringify(scores.slice(0, 5)));
+        }
+
+        function updateLeaderboardUI() {
+            const scores = JSON.parse(localStorage.getItem('ht_scores') || '[]');
+            const container = document.getElementById('mini-leaderboard');
+            if (scores.length === 0) {
+                container.innerHTML = `<div class="text-gray-500">記録なし</div>`;
+                return;
+            }
+            container.innerHTML = scores.map((s, i) => `
+                <div class="flex justify-between items-center">
+                    <span>${i + 1}. <strong class="text-yellow-400">${s.score.toLocaleString()}pt</strong> (${s.mode})</span>
+                    <span class="text-gray-400 text-[10px]">${s.rank} | ${s.date}</span>
+                </div>
+            `).join('');
+        }
+
+        function resetLeaderboard() {
+            localStorage.removeItem('ht_scores');
+            updateLeaderboardUI();
+        }
+
+        function returnToMenu() {
+            document.getElementById('result-screen').classList.add('hidden');
+            document.getElementById('menu-screen').classList.remove('hidden');
+            document.getElementById('hud-stats').classList.add('hidden');
+        }
+
+        function restartGame() {
+            startGame();
+        }
+
+        window.onload = () => {
+            // Bind click handler first to ensure high UI responsiveness
+            const startBtn = document.getElementById('start-btn');
+            if (startBtn) {
+                startBtn.addEventListener('click', startGame);
+            }
+
+            // Default mode selection setup
+            selectGameMode('30s', false);
+
+            // Initialize 3D Engine and Camera gracefully
+            init3D();
+            initCameraAndPose();
+            updateLeaderboardUI();
+            
+            // Start main render loop
+            animate(performance.now());
+        };
+    </script>
+</body>
+</html>
